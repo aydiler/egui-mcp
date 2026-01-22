@@ -100,8 +100,13 @@ impl EventQueue {
         });
     }
 
-    /// Queue a pointer click (press + release) at a position.
+    /// Queue a pointer click (move + press + release) at a position.
     pub fn queue_pointer_click(&mut self, pos: Pos2) {
+        // First move pointer to position (required for egui to detect hover)
+        self.pointer_events.push_back(PointerEvent {
+            kind: PointerEventKind::Move,
+            pos: Some(pos),
+        });
         self.pointer_events.push_back(PointerEvent {
             kind: PointerEventKind::Press,
             pos: Some(pos),

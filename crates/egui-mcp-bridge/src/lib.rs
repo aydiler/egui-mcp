@@ -36,9 +36,12 @@ pub mod managed;
 pub mod protocol;
 pub mod server;
 pub mod tree;
+pub mod ui_ext;
 
 // Re-export managed response types for convenience
 pub use managed::{ManagedResponse, McpResponseExt};
+// Re-export UI extension trait
+pub use ui_ext::McpUiExt;
 
 use egui::accesskit::{ActionRequest, TreeUpdate};
 use egui::{Context, Rect, Response};
@@ -106,6 +109,21 @@ enum DragPhase {
     Done,
 }
 
+/// Pending click operation that spans multiple frames.
+#[derive(Debug, Clone)]
+struct PendingClick {
+    pos: egui::Pos2,
+    phase: ClickPhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ClickPhase {
+    Move,
+    Press,
+    Release,
+    Done,
+}
+
 /// Configuration for the MCP bridge.
 #[derive(Debug, Clone)]
 pub struct McpBridgeConfig {
@@ -147,13 +165,18 @@ impl Default for McpBridgeBuilder {
 }
 
 /// Main bridge type that egui apps hold.
+///
+/// This type is `Clone` - cloning creates a new handle to the same underlying
+/// bridge instance. This is useful for storing in egui's context data.
+#[derive(Clone)]
 pub struct McpBridge {
     config: McpBridgeConfig,
     inner: Arc<Mutex<BridgeInner>>,
     command_rx: Arc<Mutex<mpsc::Receiver<BridgeCommand>>>,
     pending_actions: Arc<Mutex<Vec<ActionRequest>>>,
     runtime_handle: tokio::runtime::Handle,
-    _runtime: Option<tokio::runtime::Runtime>,
+    // Note: Runtime is not cloned - only the original instance owns it
+    _runtime: Arc<Option<tokio::runtime::Runtime>>,
 }
 
 struct BridgeInner {
@@ -162,6 +185,7 @@ struct BridgeInner {
     widgets: HashMap<u64, WidgetInfo>,
     widget_counter: u64,
     pending_drag: Option<PendingDrag>,
+    pending_click: Option<PendingClick>,
 }
 
 impl McpBridge {
@@ -201,11 +225,12 @@ impl McpBridge {
                 widgets: HashMap::new(),
                 widget_counter: 0,
                 pending_drag: None,
+                pending_click: None,
             })),
             command_rx: Arc::new(Mutex::new(command_rx)),
             pending_actions: Arc::new(Mutex::new(Vec::new())),
             runtime_handle,
-            _runtime: Some(runtime),
+            _runtime: Arc::new(Some(runtime)),
         }
     }
 
@@ -431,6 +456,42 @@ impl McpBridge {
             inner.pending_drag = None;
         }
 
+        // Process pending click one phase per frame (for buttons that need multi-frame clicks)
+        if let Some(ref mut click) = inner.pending_click {
+            let event = match click.phase {
+                ClickPhase::Move => {
+                    click.phase = ClickPhase::Press;
+                    Some(egui::Event::PointerMoved(click.pos))
+                }
+                ClickPhase::Press => {
+                    click.phase = ClickPhase::Release;
+                    Some(egui::Event::PointerButton {
+                        pos: click.pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                }
+                ClickPhase::Release => {
+                    click.phase = ClickPhase::Done;
+                    Some(egui::Event::PointerButton {
+                        pos: click.pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                }
+                ClickPhase::Done => None,
+            };
+            if let Some(event) = event {
+                raw_input.events.push(event);
+            }
+        }
+        // Clear completed click
+        if inner.pending_click.as_ref().map(|c| c.phase == ClickPhase::Done).unwrap_or(false) {
+            inner.pending_click = None;
+        }
+
         // Get pending AccessKit actions and store them for later retrieval
         let actions = inner.event_queue.take_accesskit_actions();
         if !actions.is_empty() {
@@ -532,22 +593,32 @@ impl McpBridge {
             }
 
             BridgeCommand::Click { node_id, respond } => {
-                // First try AccessKit tree with coordinate-based click (more reliable)
-                if let Some(node) = inner.tree.get(node_id) {
-                    if let Some(center) = node.center() {
-                        // Prefer coordinate-based click when bounds are available
-                        inner.event_queue.queue_pointer_click(center);
-                    } else {
-                        // Fall back to AccessKit action if no bounds
-                        inner.event_queue.queue_click(node_id);
-                    }
+                // Try widget registry first (matches snapshot behavior)
+                tracing::debug!("Click n{}: widgets count = {}", node_id.0, inner.widgets.len());
+                if let Some(widget) = inner.widgets.get(&node_id.0) {
+                    let center = widget.rect.center();
+                    tracing::debug!("Click n{}: Found widget '{}' at ({}, {})",
+                        node_id.0, widget.name, center.x, center.y);
+                    // Use multi-frame click for reliable button activation
+                    inner.pending_click = Some(PendingClick {
+                        pos: center,
+                        phase: ClickPhase::Move,
+                    });
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
-                } else if let Some(widget) = inner.widgets.get(&node_id.0) {
-                    // Fall back to widget registry - queue a pointer click at widget center
-                    let center = widget.rect.center();
-                    inner.event_queue.queue_pointer_click(center);
+                } else if let Some(node) = inner.tree.get(node_id) {
+                    tracing::debug!("Click n{}: Not in widgets, trying AccessKit tree", node_id.0);
+                    // Fall back to AccessKit tree
+                    if let Some(center) = node.center() {
+                        inner.pending_click = Some(PendingClick {
+                            pos: center,
+                            phase: ClickPhase::Move,
+                        });
+                    } else {
+                        // No bounds available, try AccessKit action
+                        inner.event_queue.queue_click(node_id);
+                    }
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
@@ -560,21 +631,20 @@ impl McpBridge {
             }
 
             BridgeCommand::Focus { node_id, respond } => {
-                if let Some(node) = inner.tree.get(node_id) {
-                    if let Some(center) = node.center() {
-                        // Use coordinate-based click to focus when bounds available
-                        inner.event_queue.queue_pointer_click(center);
-                    } else {
-                        // Fall back to AccessKit focus action
-                        inner.event_queue.queue_focus(node_id);
-                    }
+                // Try widget registry first (matches snapshot behavior)
+                if let Some(widget) = inner.widgets.get(&node_id.0) {
+                    let center = widget.rect.center();
+                    inner.event_queue.queue_pointer_click(center);
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
-                } else if let Some(widget) = inner.widgets.get(&node_id.0) {
-                    // Widget registry focus - click to focus
-                    let center = widget.rect.center();
-                    inner.event_queue.queue_pointer_click(center);
+                } else if let Some(node) = inner.tree.get(node_id) {
+                    // Fall back to AccessKit tree
+                    if let Some(center) = node.center() {
+                        inner.event_queue.queue_pointer_click(center);
+                    } else {
+                        inner.event_queue.queue_focus(node_id);
+                    }
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
@@ -682,17 +752,18 @@ impl McpBridge {
             }
 
             BridgeCommand::Hover { node_id, respond } => {
-                if let Some(node) = inner.tree.get(node_id) {
+                // Try widget registry first (matches snapshot behavior)
+                if let Some(widget) = inner.widgets.get(&node_id.0) {
+                    let center = widget.rect.center();
+                    inner.event_queue.queue_hover(center);
+                    self.runtime_handle.spawn(async move {
+                        respond.send(Ok(())).await;
+                    });
+                } else if let Some(node) = inner.tree.get(node_id) {
                     if let Some(center) = node.center() {
                         inner.event_queue.queue_hover(center);
                     }
                     // If no bounds, hover is a no-op but still succeeds
-                    self.runtime_handle.spawn(async move {
-                        respond.send(Ok(())).await;
-                    });
-                } else if let Some(widget) = inner.widgets.get(&node_id.0) {
-                    let center = widget.rect.center();
-                    inner.event_queue.queue_hover(center);
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
@@ -705,20 +776,21 @@ impl McpBridge {
             }
 
             BridgeCommand::GetValue { node_id, respond } => {
-                if let Some(node) = inner.tree.get(node_id) {
-                    let response = ValueResponse {
-                        value: node.value.clone(),
-                        role: format!("{:?}", node.role),
-                        name: node.name.clone(),
-                    };
-                    self.runtime_handle.spawn(async move {
-                        respond.send(Ok(response)).await;
-                    });
-                } else if let Some(widget) = inner.widgets.get(&node_id.0) {
+                // Try widget registry first (matches snapshot behavior)
+                if let Some(widget) = inner.widgets.get(&node_id.0) {
                     let response = ValueResponse {
                         value: widget.value.clone(),
                         role: widget.widget_type.clone(),
                         name: Some(widget.name.clone()),
+                    };
+                    self.runtime_handle.spawn(async move {
+                        respond.send(Ok(response)).await;
+                    });
+                } else if let Some(node) = inner.tree.get(node_id) {
+                    let response = ValueResponse {
+                        value: node.value.clone(),
+                        role: format!("{:?}", node.role),
+                        name: node.name.clone(),
                     };
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(response)).await;
