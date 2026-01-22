@@ -163,6 +163,14 @@ impl EguiMcpServer {
                     for (key, value) in env {
                         cmd.env(key, value);
                     }
+                    
+                    // Auto-detect X11 requirement: if DISPLAY is set but WINIT_UNIX_BACKEND is not,
+                    // force X11 mode to ensure virtual display works on Wayland systems
+                    if env.contains_key("DISPLAY") && !env.contains_key("WINIT_UNIX_BACKEND") {
+                        cmd.env("WINIT_UNIX_BACKEND", "x11");
+                        // Also remove WAYLAND_DISPLAY to prevent winit from preferring Wayland
+                        cmd.env_remove("WAYLAND_DISPLAY");
+                    }
                 }
 
                 // Spawn the process
