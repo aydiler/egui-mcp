@@ -10,11 +10,35 @@
 //!     // Pass bridge to your eframe app and call bridge methods in update()
 //! }
 //! ```
+//!
+//! # Ensuring Widget Registration
+//!
+//! For widgets that need explicit registration (like icon-only buttons),
+//! use the [`ManagedResponse`] wrapper to catch forgotten registrations:
+//!
+//! ```rust,no_run
+//! use egui_mcp_bridge::{McpBridge, McpResponseExt};
+//!
+//! fn ui_code(ui: &mut egui::Ui, bridge: &McpBridge) {
+//!     // This will warn if you forget to register
+//!     if ui.button("⊞")
+//!         .managed_as("expand button")
+//!         .register_button(bridge, "Expand All")
+//!         .clicked()
+//!     {
+//!         // Handle click
+//!     }
+//! }
+//! ```
 
 pub mod events;
+pub mod managed;
 pub mod protocol;
 pub mod server;
 pub mod tree;
+
+// Re-export managed response types for convenience
+pub use managed::{ManagedResponse, McpResponseExt};
 
 use egui::accesskit::{ActionRequest, TreeUpdate};
 use egui::{Context, Rect, Response};
@@ -35,6 +59,34 @@ pub struct WidgetInfo {
     pub rect: Rect,
     pub value: Option<String>,
     pub enabled: bool,
+}
+
+/// Coverage statistics for MCP widget registration.
+///
+/// Returned by [`McpBridge::get_coverage`] to help diagnose
+/// whether widgets are properly registered for testing.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameCoverage {
+    /// Number of nodes in the AccessKit tree (automatic coverage).
+    pub accesskit_nodes: usize,
+    /// Number of manually registered widgets.
+    pub registered_widgets: usize,
+}
+
+impl FrameCoverage {
+    /// Total interactive elements available for MCP testing.
+    pub fn total(&self) -> usize {
+        // Note: These can overlap, so this is an upper bound
+        self.accesskit_nodes + self.registered_widgets
+    }
+
+    /// Check if coverage seems reasonable.
+    ///
+    /// Returns `true` if there's at least some coverage from either
+    /// AccessKit or manual registration.
+    pub fn is_reasonable(&self) -> bool {
+        self.accesskit_nodes > 0 || self.registered_widgets > 0
+    }
 }
 
 /// Pending drag operation that spans multiple frames.
@@ -254,6 +306,60 @@ impl McpBridge {
     pub fn widget_count(&self) -> usize {
         let inner = self.inner.lock().unwrap();
         inner.widgets.len()
+    }
+
+    /// Get coverage statistics for the current frame.
+    ///
+    /// Returns information about how many widgets are registered vs
+    /// how many AccessKit nodes exist. Useful for debugging MCP coverage.
+    pub fn get_coverage(&self) -> FrameCoverage {
+        let inner = self.inner.lock().unwrap();
+        FrameCoverage {
+            accesskit_nodes: inner.tree.node_count(),
+            registered_widgets: inner.widgets.len(),
+        }
+    }
+
+    /// Validate widget coverage and log warnings if coverage seems low.
+    ///
+    /// Call this at the end of your frame (after `capture_output()`) in
+    /// debug builds to catch potential missing registrations.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    ///     // ... render widgets ...
+    ///
+    ///     self.bridge.capture_output(ctx);
+    ///
+    ///     #[cfg(debug_assertions)]
+    ///     self.bridge.validate_coverage();
+    /// }
+    /// ```
+    pub fn validate_coverage(&self) {
+        let coverage = self.get_coverage();
+
+        // Heuristic: if very few widgets registered and no AccessKit tree,
+        // something is likely wrong
+        if coverage.accesskit_nodes == 0 && coverage.registered_widgets == 0 {
+            tracing::warn!(
+                "MCP coverage warning: No widgets registered and no AccessKit tree. \
+                 Did you forget to call capture_output() or register_widget()?"
+            );
+        } else if coverage.accesskit_nodes == 0 && coverage.registered_widgets < 3 {
+            tracing::info!(
+                "MCP coverage: {} widgets registered (no AccessKit tree). \
+                 Consider using capture_output() for automatic coverage.",
+                coverage.registered_widgets
+            );
+        }
+
+        tracing::debug!(
+            "MCP coverage: {} AccessKit nodes, {} manually registered widgets",
+            coverage.accesskit_nodes,
+            coverage.registered_widgets
+        );
     }
 
     /// Inject any pending events into the egui context.
