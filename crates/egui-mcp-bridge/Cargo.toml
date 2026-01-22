@@ -1,0 +1,16 @@
+[package]
+name = "egui-mcp-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Bridge library enabling MCP-based E2E testing for egui applications"
+
+[dependencies]
+egui.workspace = true
+accesskit.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
