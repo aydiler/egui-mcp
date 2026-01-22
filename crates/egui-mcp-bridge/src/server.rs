@@ -5,7 +5,7 @@ use crate::protocol::{
     SetValueParams, SnapshotResponse, SuccessResponse, TypeTextParams, ValueResponse,
     INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, NODE_NOT_FOUND,
 };
-use accesskit::NodeId;
+use egui::accesskit::NodeId;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;

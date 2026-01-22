@@ -1,6 +1,6 @@
 //! Event injection for egui via AccessKit actions.
 
-use accesskit::{Action, ActionRequest, NodeId};
+use egui::accesskit::{Action, ActionRequest, NodeId};
 use egui::{Event, Pos2};
 use std::collections::VecDeque;
 
@@ -69,7 +69,7 @@ impl EventQueue {
         self.accesskit_actions.push_back(ActionRequest {
             target: node_id,
             action: Action::SetValue,
-            data: Some(accesskit::ActionData::Value(value.into())),
+            data: Some(egui::accesskit::ActionData::Value(value.into())),
         });
     }
 

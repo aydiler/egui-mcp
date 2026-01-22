@@ -8,7 +8,6 @@ description = "Bridge library enabling MCP-based E2E testing for egui applicatio
 
 [dependencies]
 egui.workspace = true
-accesskit.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
