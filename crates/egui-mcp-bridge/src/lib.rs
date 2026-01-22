@@ -16,7 +16,7 @@ pub mod protocol;
 pub mod server;
 pub mod tree;
 
-use accesskit::{ActionRequest, TreeUpdate};
+use egui::accesskit::{ActionRequest, TreeUpdate};
 use egui::{Context, Rect, Response};
 use events::EventQueue;
 use protocol::{SnapshotResponse, ValueResponse};
@@ -191,6 +191,33 @@ impl McpBridge {
                 rect: response.rect,
                 value: value.map(|s| s.to_string()),
                 enabled: response.sense.senses_click() || response.sense.senses_drag(),
+            },
+        );
+        id
+    }
+
+    /// Register a widget using a rect directly (for widgets in closures where Response isn't available).
+    /// Assumes the widget is enabled (clickable).
+    /// Returns a unique ID that can be used as a ref.
+    pub fn register_widget_rect(
+        &self,
+        name: &str,
+        widget_type: &str,
+        rect: Rect,
+        value: Option<&str>,
+    ) -> u64 {
+        let mut inner = self.inner.lock().unwrap();
+        inner.widget_counter += 1;
+        let id = inner.widget_counter;
+        inner.widgets.insert(
+            id,
+            WidgetInfo {
+                id,
+                name: name.to_string(),
+                widget_type: widget_type.to_string(),
+                rect,
+                value: value.map(|s| s.to_string()),
+                enabled: true, // Assume clickable
             },
         );
         id
