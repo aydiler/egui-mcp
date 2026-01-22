@@ -56,7 +56,7 @@ impl EguiMcpServer {
             ),
             Tool::new(
                 "egui_launch",
-                "Launch an egui application with optional environment variables (e.g., DISPLAY for virtual X11). Waits for MCP bridge to be available, then auto-connects.",
+                "Launch an egui application with optional environment variables. Auto-detects X11 mode when DISPLAY is set (for virtual displays like Xvfb). Waits for MCP bridge, then auto-connects.",
                 schema_to_json_object::<LaunchParams>(),
             ),
             Tool::new(

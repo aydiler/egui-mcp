@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 egui-mcp is an MCP (Model Context Protocol) server and bridge library for E2E testing of egui applications. It enables AI assistants to interact with egui apps by:
 1. Exposing the UI's AccessKit accessibility tree via MCP tools
 2. Allowing programmatic interactions (clicks, text input, value changes)
+3. **Managing app lifecycle** (launch, kill) with automatic display detection
 
 ## Build Commands
 
@@ -17,11 +18,12 @@ cargo build
 # Build release
 cargo build --release
 
-# Run the MCP server (communicates via stdio)
-cargo run -p egui-mcp-server
+# Build and install MCP server
+cargo build --release -p egui-mcp-server
+# Binary: target/release/egui-mcp-server
 
-# Run the test app (listens on port 9876)
-cargo run -p test-app
+# Run the test app (listens on port 9877)
+cargo run -p test-app --features mcp
 
 # Check without building
 cargo check
@@ -31,6 +33,70 @@ cargo clippy
 
 # Format code
 cargo fmt
+```
+
+## MCP Tools
+
+### App Lifecycle
+- `egui_launch` - Launch app with env vars, auto-connect (⭐ **auto-detects X11 mode**)
+- `egui_kill` - Kill launched app and disconnect
+- `egui_connect` - Connect to already-running app
+- `egui_disconnect` - Disconnect from app
+- `egui_status` - Check connection and launch status
+
+### UI Inspection & Interaction
+- `egui_snapshot` - Get accessibility tree with `[ref=nX]` references
+- `egui_click` - Click element by ref
+- `egui_type` - Type text into input
+- `egui_fill` - Set value (sliders, spinboxes)
+- `egui_focus` - Focus element
+- `egui_hover` - Hover over element
+- `egui_get_value` - Get element value
+- `egui_scroll` - Scroll at position
+
+## Virtual Display Testing (X11/Xvfb)
+
+### Automatic X11 Detection
+
+The `egui_launch` tool **automatically detects** when you're using a virtual display:
+
+```
+egui_launch({
+  applicationPath: "./target/debug/my-app",
+  args: ["file.txt"],
+  env: { "DISPLAY": ":99" }  // ⭐ That's all you need!
+})
+```
+
+When `DISPLAY` is set, it automatically:
+1. Sets `WINIT_UNIX_BACKEND=x11` (forces X11 mode)
+2. Removes `WAYLAND_DISPLAY` (prevents Wayland preference)
+
+This ensures egui apps use the virtual X11 display on Wayland systems.
+
+### Complete Virtual Display Workflow
+
+```bash
+# 1. Start Xvfb (once per session)
+Xvfb :99 -screen 0 1920x1080x24 &
+```
+
+```
+# 2. Launch app on virtual display (auto-detects X11)
+egui_launch({
+  applicationPath: "./target/debug/app",
+  env: { "DISPLAY": ":99" }
+})
+
+# 3. Interact
+egui_snapshot()
+egui_click({ ref: "n5" })
+
+# 4. Visual verification
+screenshot_window({ pattern: "App", display: ":99" })
+
+# 5. Cleanup
+egui_kill()
 ```
 
 ## Architecture
@@ -50,7 +116,7 @@ egui-mcp/
 
 **egui-mcp-bridge** (library):
 - Embedded into egui applications
-- Runs a TCP server (default port 9876) using JSON-RPC 2.0
+- Runs a TCP server (default port 9877) using JSON-RPC 2.0
 - Captures AccessKit accessibility tree each frame
 - Maintains widget registry for elements without AccessKit support
 - Injects events (clicks, key presses, pointer events) into egui
@@ -58,7 +124,8 @@ egui-mcp/
 **egui-mcp-server** (binary):
 - MCP server using rmcp crate (stdio transport)
 - Connects to egui-mcp-bridge via TCP
-- Exposes tools: `egui_connect`, `egui_snapshot`, `egui_click`, `egui_type`, `egui_fill`, `egui_focus`, `egui_hover`, `egui_get_value`
+- Manages app lifecycle (launch/kill)
+- Exposes all MCP tools listed above
 
 ### Communication Flow
 
@@ -73,7 +140,7 @@ MCP Client (Claude) <--stdio--> egui-mcp-server <--TCP/JSON-RPC--> egui-mcp-brid
 - `crates/egui-mcp-bridge/src/tree.rs` - AccessKit tree serialization with `[ref=nX]` format
 - `crates/egui-mcp-bridge/src/events.rs` - Event queue for injecting pointer/key/text events
 - `crates/egui-mcp-bridge/src/protocol.rs` - JSON-RPC protocol types
-- `crates/egui-mcp-server/src/tools.rs` - MCP tool implementations
+- `crates/egui-mcp-server/src/tools.rs` - MCP tool implementations (including `egui_launch`)
 - `crates/egui-mcp-server/src/bridge.rs` - TCP client to connect to bridge
 
 ### Integration Pattern
@@ -82,7 +149,7 @@ Apps integrate the bridge like this:
 
 ```rust
 // Create bridge (starts TCP server)
-let bridge = McpBridge::builder().port(9876).build();
+let bridge = McpBridge::builder().port(9877).build();
 
 // In eframe::App implementation:
 fn raw_input_hook(&mut self, _ctx: &Context, raw_input: &mut RawInput) {
@@ -112,3 +179,30 @@ Elements are identified by refs like `[ref=n3]`. The number comes from:
 
 Slider drags use a state machine (`DragPhase`) that executes over multiple frames:
 `MoveToStart` -> `Press` -> `Drag` -> `Release` -> `Done`
+
+## Testing Gotchas
+
+### Wayland vs X11 on Linux
+
+**Problem:** egui/winit defaults to Wayland on Wayland systems, which ignores `DISPLAY` env var.
+
+**Solution:** The `egui_launch` tool auto-detects this and forces X11 mode when `DISPLAY` is set.
+
+**Manual workaround** (if not using `egui_launch`):
+```bash
+DISPLAY=:99 WINIT_UNIX_BACKEND=x11 ./my-app
+```
+
+### Port Conflicts
+
+Default port is 9877. If multiple apps run simultaneously, specify different ports:
+
+```rust
+// In app
+let bridge = McpBridge::builder().port(9878).build();
+```
+
+```
+// In MCP
+egui_launch({ applicationPath: "...", port: 9878 })
+```
