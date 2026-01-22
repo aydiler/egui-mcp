@@ -139,6 +139,17 @@ pub struct GetValueParams {
     pub node_id: u64,
 }
 
+/// Scroll parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScrollParams {
+    /// Position to scroll at (x, y). The scroll will happen at this location.
+    pub x: f32,
+    pub y: f32,
+    /// Scroll delta in pixels. Positive = scroll down/right, negative = scroll up/left.
+    pub delta_x: f32,
+    pub delta_y: f32,
+}
+
 /// Snapshot response containing the serialized tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotResponse {

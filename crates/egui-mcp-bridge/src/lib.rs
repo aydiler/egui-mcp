@@ -802,6 +802,21 @@ impl McpBridge {
                     });
                 }
             }
+
+            BridgeCommand::Scroll {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                respond,
+            } => {
+                let pos = egui::pos2(x, y);
+                let delta = egui::vec2(delta_x, delta_y);
+                inner.event_queue.queue_scroll(pos, delta);
+                self.runtime_handle.spawn(async move {
+                    respond.send(Ok(())).await;
+                });
+            }
         }
     }
 }

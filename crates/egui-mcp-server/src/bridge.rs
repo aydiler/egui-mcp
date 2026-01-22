@@ -142,6 +142,18 @@ impl BridgeClient {
         serde_json::from_value(response).map_err(|e| format!("Invalid response: {}", e))
     }
 
+    /// Scroll at a position.
+    pub async fn scroll(&self, x: f32, y: f32, delta_x: f32, delta_y: f32) -> Result<(), String> {
+        let params = serde_json::json!({
+            "x": x,
+            "y": y,
+            "delta_x": delta_x,
+            "delta_y": delta_y
+        });
+        self.call("scroll", Some(params)).await?;
+        Ok(())
+    }
+
     async fn call(
         &self,
         method: &str,

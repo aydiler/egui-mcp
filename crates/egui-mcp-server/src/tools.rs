@@ -93,6 +93,11 @@ impl EguiMcpServer {
                 "Get current value of element.",
                 schema_to_json_object::<RefParams>(),
             ),
+            Tool::new(
+                "egui_scroll",
+                "Scroll at a position. Use to test scroll isolation between panels.",
+                schema_to_json_object::<ScrollParams>(),
+            ),
         ]
     }
 
@@ -238,6 +243,20 @@ impl EguiMcpServer {
                     Err(e) => error(format!("Get value failed: {}", e)),
                 }
             }
+            "egui_scroll" => {
+                let params: ScrollParams = match serde_json::from_value(args) {
+                    Ok(p) => p,
+                    Err(e) => return error(format!("Invalid params: {}", e)),
+                };
+                let client = self.client.lock().await;
+                match client.scroll(params.x, params.y, params.delta_x, params.delta_y).await {
+                    Ok(()) => success(format!(
+                        "Scrolled at ({}, {}) by delta ({}, {})",
+                        params.x, params.y, params.delta_x, params.delta_y
+                    )),
+                    Err(e) => error(format!("Scroll failed: {}", e)),
+                }
+            }
             _ => error(format!("Unknown tool: {}", name)),
         }
     }
@@ -296,4 +315,17 @@ pub struct FillParams {
     pub r#ref: String,
     /// Value to set
     pub value: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ScrollParams {
+    /// X position to scroll at
+    pub x: f32,
+    /// Y position to scroll at
+    pub y: f32,
+    /// Horizontal scroll delta (positive = right)
+    #[serde(default)]
+    pub delta_x: f32,
+    /// Vertical scroll delta (positive = down, negative = up)
+    pub delta_y: f32,
 }

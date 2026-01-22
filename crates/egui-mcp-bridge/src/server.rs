@@ -2,7 +2,7 @@
 
 use crate::protocol::{
     ClickParams, FocusParams, GetValueParams, HoverParams, Request, RequestId, Response,
-    SetValueParams, SnapshotResponse, SuccessResponse, TypeTextParams, ValueResponse,
+    ScrollParams, SetValueParams, SnapshotResponse, SuccessResponse, TypeTextParams, ValueResponse,
     INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, NODE_NOT_FOUND,
 };
 use egui::accesskit::NodeId;
@@ -41,6 +41,13 @@ pub enum BridgeCommand {
     GetValue {
         node_id: NodeId,
         respond: oneshot::Sender<Result<ValueResponse, String>>,
+    },
+    Scroll {
+        x: f32,
+        y: f32,
+        delta_x: f32,
+        delta_y: f32,
+        respond: oneshot::Sender<Result<(), String>>,
     },
 }
 
@@ -355,6 +362,38 @@ async fn handle_request(request: Request, command_tx: &mpsc::Sender<BridgeComman
             match rx.recv().await {
                 Some(Ok(value)) => Response::success(id, value),
                 Some(Err(e)) => Response::error(id, NODE_NOT_FOUND, e),
+                None => Response::error(id, INTERNAL_ERROR, "No response from bridge"),
+            }
+        }
+
+        "scroll" => {
+            let params: ScrollParams = match parse_params(&request) {
+                Ok(p) => p,
+                Err(e) => return Response::error(id, INVALID_PARAMS, e),
+            };
+            let (tx, rx) = oneshot::channel();
+            if command_tx
+                .send(BridgeCommand::Scroll {
+                    x: params.x,
+                    y: params.y,
+                    delta_x: params.delta_x,
+                    delta_y: params.delta_y,
+                    respond: tx,
+                })
+                .await
+                .is_err()
+            {
+                return Response::error(id, INTERNAL_ERROR, "Bridge disconnected");
+            }
+            match rx.recv().await {
+                Some(Ok(())) => Response::success(
+                    id,
+                    SuccessResponse {
+                        success: true,
+                        message: None,
+                    },
+                ),
+                Some(Err(e)) => Response::error(id, INTERNAL_ERROR, e),
                 None => Response::error(id, INTERNAL_ERROR, "No response from bridge"),
             }
         }

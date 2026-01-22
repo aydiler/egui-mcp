@@ -1,7 +1,7 @@
 //! Event injection for egui via AccessKit actions.
 
 use egui::accesskit::{Action, ActionRequest, NodeId};
-use egui::{Event, Pos2};
+use egui::{Event, Pos2, Vec2};
 use std::collections::VecDeque;
 
 /// Queue of events to inject into egui.
@@ -11,6 +11,7 @@ pub struct EventQueue {
     pointer_events: VecDeque<PointerEvent>,
     text_events: VecDeque<TextEvent>,
     key_events: VecDeque<KeyEvent>,
+    scroll_events: VecDeque<ScrollEvent>,
 }
 
 /// Key event to inject.
@@ -39,6 +40,13 @@ pub enum PointerEventKind {
 #[derive(Debug, Clone)]
 pub struct TextEvent {
     pub text: String,
+}
+
+/// Scroll event.
+#[derive(Debug, Clone)]
+pub struct ScrollEvent {
+    pub pos: Pos2,
+    pub delta: Vec2,
 }
 
 impl EventQueue {
@@ -117,6 +125,16 @@ impl EventQueue {
         });
     }
 
+    /// Queue a scroll event at a position.
+    pub fn queue_scroll(&mut self, pos: Pos2, delta: Vec2) {
+        // First move pointer to position so scroll happens in the right area
+        self.pointer_events.push_back(PointerEvent {
+            kind: PointerEventKind::Move,
+            pos: Some(pos),
+        });
+        self.scroll_events.push_back(ScrollEvent { pos, delta });
+    }
+
     /// Queue a slider drag from start to end position.
     pub fn queue_slider_drag(&mut self, from: Pos2, to: Pos2) {
         // Move to start position
@@ -193,6 +211,15 @@ impl EventQueue {
             events.push(Event::Text(te.text));
         }
 
+        // Convert scroll events
+        for se in self.scroll_events.drain(..) {
+            events.push(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: se.delta,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+
         events
     }
 
@@ -202,5 +229,6 @@ impl EventQueue {
             || !self.pointer_events.is_empty()
             || !self.text_events.is_empty()
             || !self.key_events.is_empty()
+            || !self.scroll_events.is_empty()
     }
 }
