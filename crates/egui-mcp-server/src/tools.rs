@@ -8,8 +8,11 @@ use rmcp::{
 use schemars::{schema_for, JsonSchema};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::{sleep, Duration};
 
 /// Convert a schemars schema to a JSON object for rmcp Tool.
 fn schema_to_json_object<T: JsonSchema>() -> Arc<Map<String, Value>> {
@@ -32,12 +35,15 @@ fn empty_schema() -> Arc<Map<String, Value>> {
 #[derive(Clone)]
 pub struct EguiMcpServer {
     pub client: Arc<Mutex<BridgeClient>>,
+    /// Launched app process (if any)
+    pub launched_process: Arc<Mutex<Option<Child>>>,
 }
 
 impl EguiMcpServer {
     pub fn new() -> Self {
         Self {
             client: Arc::new(Mutex::new(BridgeClient::new())),
+            launched_process: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -47,6 +53,16 @@ impl EguiMcpServer {
                 "egui_connect",
                 "Connect to egui app bridge. Must be called before other tools.",
                 schema_to_json_object::<ConnectParams>(),
+            ),
+            Tool::new(
+                "egui_launch",
+                "Launch an egui application with optional environment variables (e.g., DISPLAY for virtual X11). Waits for MCP bridge to be available, then auto-connects.",
+                schema_to_json_object::<LaunchParams>(),
+            ),
+            Tool::new(
+                "egui_kill",
+                "Kill the launched egui application.",
+                empty_schema(),
             ),
             Tool::new(
                 "egui_disconnect",
@@ -117,6 +133,110 @@ impl EguiMcpServer {
                     Err(e) => error(format!("Connection failed: {}", e)),
                 }
             }
+            "egui_launch" => {
+                let params: LaunchParams = match serde_json::from_value(args) {
+                    Ok(p) => p,
+                    Err(e) => return error(format!("Invalid params: {}", e)),
+                };
+
+                // Check if already launched
+                {
+                    let proc = self.launched_process.lock().await;
+                    if proc.is_some() {
+                        return error("An app is already launched. Use egui_kill first.");
+                    }
+                }
+
+                let port = params.port.unwrap_or(9877);
+                let host = params.host.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+
+                // Build command
+                let mut cmd = Command::new(&params.application_path);
+                
+                // Add arguments if provided
+                if let Some(ref args) = params.args {
+                    cmd.args(args);
+                }
+
+                // Set environment variables
+                if let Some(ref env) = params.env {
+                    for (key, value) in env {
+                        cmd.env(key, value);
+                    }
+                }
+
+                // Spawn the process
+                cmd.stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+
+                let child = match cmd.spawn() {
+                    Ok(c) => c,
+                    Err(e) => return error(format!("Failed to launch app: {}", e)),
+                };
+
+                let pid = child.id();
+
+                // Store the process
+                {
+                    let mut proc = self.launched_process.lock().await;
+                    *proc = Some(child);
+                }
+
+                // Wait for the MCP bridge to become available
+                let timeout_secs = params.timeout.unwrap_or(10);
+                let start = std::time::Instant::now();
+                let mut connected = false;
+
+                while start.elapsed().as_secs() < timeout_secs as u64 {
+                    let client = self.client.lock().await;
+                    if client.connect(&host, port).await.is_ok() {
+                        connected = true;
+                        break;
+                    }
+                    drop(client);
+                    sleep(Duration::from_millis(200)).await;
+                }
+
+                if connected {
+                    let env_info = params.env.as_ref().map_or(String::new(), |env| {
+                        let vars: Vec<String> = env.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+                        format!(" (env: {})", vars.join(", "))
+                    });
+                    success(format!(
+                        "Launched {} (PID {}) and connected to {}:{}{}",
+                        params.application_path, pid, host, port, env_info
+                    ))
+                } else {
+                    // Kill the process since we couldn't connect
+                    {
+                        let mut proc = self.launched_process.lock().await;
+                        if let Some(mut p) = proc.take() {
+                            let _ = p.kill();
+                        }
+                    }
+                    error(format!(
+                        "Launched app but MCP bridge not available at {}:{} within {}s. App killed.",
+                        host, port, timeout_secs
+                    ))
+                }
+            }
+            "egui_kill" => {
+                let mut proc = self.launched_process.lock().await;
+                if let Some(mut child) = proc.take() {
+                    match child.kill() {
+                        Ok(()) => {
+                            // Also disconnect
+                            let client = self.client.lock().await;
+                            client.disconnect().await;
+                            success("Killed launched app and disconnected")
+                        }
+                        Err(e) => error(format!("Failed to kill app: {}", e)),
+                    }
+                } else {
+                    error("No launched app to kill")
+                }
+            }
             "egui_disconnect" => {
                 let client = self.client.lock().await;
                 client.disconnect().await;
@@ -124,11 +244,17 @@ impl EguiMcpServer {
             }
             "egui_status" => {
                 let client = self.client.lock().await;
-                if client.is_connected().await {
-                    success("Connected")
-                } else {
-                    success("Not connected")
-                }
+                let proc = self.launched_process.lock().await;
+                let launched = proc.is_some();
+                let connected = client.is_connected().await;
+                
+                let status = match (launched, connected) {
+                    (true, true) => "App launched and connected",
+                    (true, false) => "App launched but not connected",
+                    (false, true) => "Connected (externally launched app)",
+                    (false, false) => "Not connected",
+                };
+                success(status)
             }
             "egui_snapshot" => {
                 let client = self.client.lock().await;
@@ -293,6 +419,27 @@ pub struct ConnectParams {
     pub host: String,
     /// Port number (e.g., 9876)
     pub port: u16,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct LaunchParams {
+    /// Path to the egui application binary
+    pub application_path: String,
+    /// Port the app's MCP bridge listens on (default: 9877)
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Host to connect to (default: "127.0.0.1")
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Command-line arguments to pass to the application
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    /// Environment variables to set (e.g., {"DISPLAY": ":99"} for virtual X11)
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    /// Timeout in seconds to wait for MCP bridge (default: 10)
+    #[serde(default)]
+    pub timeout: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
