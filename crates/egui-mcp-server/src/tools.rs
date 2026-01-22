@@ -150,6 +150,34 @@ impl EguiMcpServer {
                 let port = params.port.unwrap_or(9877);
                 let host = params.host.clone().unwrap_or_else(|| "127.0.0.1".to_string());
 
+                // === DISPLAY ENFORCEMENT: Ensure virtual display only ===
+                // This prevents accidentally launching on real display (:0)
+                const ENFORCED_DISPLAY: &str = ":99";
+
+                // Check if user specified DISPLAY
+                let mut enforced_env = params.env.clone().unwrap_or_default();
+                if let Some(display) = enforced_env.get("DISPLAY") {
+                    if display == ":0" || display.is_empty() {
+                        return error(format!(
+                            "❌ Real display (:0) is forbidden for E2E testing\n\
+                             Use DISPLAY={} for isolated testing\n\
+                             This prevents interfering with your desktop",
+                            ENFORCED_DISPLAY
+                        ));
+                    }
+                }
+
+                // Force virtual display (override or set default)
+                enforced_env.insert("DISPLAY".to_string(), ENFORCED_DISPLAY.to_string());
+
+                // Force X11 backend for Wayland systems
+                if !enforced_env.contains_key("WINIT_UNIX_BACKEND") {
+                    enforced_env.insert("WINIT_UNIX_BACKEND".to_string(), "x11".to_string());
+                }
+                enforced_env.remove("WAYLAND_DISPLAY"); // Ensure Wayland doesn't interfere
+
+                // === END ENFORCEMENT ===
+
                 // Build command
                 let mut cmd = Command::new(&params.application_path);
                 
@@ -158,19 +186,9 @@ impl EguiMcpServer {
                     cmd.args(args);
                 }
 
-                // Set environment variables
-                if let Some(ref env) = params.env {
-                    for (key, value) in env {
-                        cmd.env(key, value);
-                    }
-                    
-                    // Auto-detect X11 requirement: if DISPLAY is set but WINIT_UNIX_BACKEND is not,
-                    // force X11 mode to ensure virtual display works on Wayland systems
-                    if env.contains_key("DISPLAY") && !env.contains_key("WINIT_UNIX_BACKEND") {
-                        cmd.env("WINIT_UNIX_BACKEND", "x11");
-                        // Also remove WAYLAND_DISPLAY to prevent winit from preferring Wayland
-                        cmd.env_remove("WAYLAND_DISPLAY");
-                    }
+                // Set enforced environment variables
+                for (key, value) in &enforced_env {
+                    cmd.env(key, value);
                 }
 
                 // Spawn the process
