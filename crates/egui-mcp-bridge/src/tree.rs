@@ -1,6 +1,6 @@
 //! AccessKit tree serialization with stable node references.
 
-use accesskit::{Node, NodeId, Role, TreeUpdate};
+use egui::accesskit::{Node, NodeId, Rect, Role, TreeUpdate};
 use std::collections::HashMap;
 
 /// Serialized AccessKit tree with node references.
@@ -22,6 +22,9 @@ pub struct NodeInfo {
     pub selected: Option<bool>,
     pub expanded: Option<bool>,
     pub disabled: bool,
+    /// Bounding box in screen coordinates (physical pixels).
+    /// Used for coordinate-based click injection.
+    pub bounds: Option<Rect>,
 }
 
 impl SerializedTree {
@@ -154,9 +157,9 @@ impl NodeInfo {
     fn from_accesskit(id: NodeId, node: &Node) -> Self {
         // Convert Toggled enum to bool
         let checked = node.toggled().map(|t| match t {
-            accesskit::Toggled::True => true,
-            accesskit::Toggled::False => false,
-            accesskit::Toggled::Mixed => true, // Treat mixed as checked
+            egui::accesskit::Toggled::True => true,
+            egui::accesskit::Toggled::False => false,
+            egui::accesskit::Toggled::Mixed => true, // Treat mixed as checked
         });
 
         Self {
@@ -169,7 +172,16 @@ impl NodeInfo {
             selected: node.is_selected(),
             expanded: node.is_expanded(),
             disabled: node.is_disabled(),
+            bounds: node.bounds(),
         }
+    }
+
+    /// Get the center point of the node's bounding box, if available.
+    pub fn center(&self) -> Option<egui::Pos2> {
+        self.bounds.map(|b| egui::pos2(
+            ((b.x0 + b.x1) / 2.0) as f32,
+            ((b.y0 + b.y1) / 2.0) as f32,
+        ))
     }
 }
 

@@ -426,9 +426,15 @@ impl McpBridge {
             }
 
             BridgeCommand::Click { node_id, respond } => {
-                // First try AccessKit tree
-                if inner.tree.get(node_id).is_some() {
-                    inner.event_queue.queue_click(node_id);
+                // First try AccessKit tree with coordinate-based click (more reliable)
+                if let Some(node) = inner.tree.get(node_id) {
+                    if let Some(center) = node.center() {
+                        // Prefer coordinate-based click when bounds are available
+                        inner.event_queue.queue_pointer_click(center);
+                    } else {
+                        // Fall back to AccessKit action if no bounds
+                        inner.event_queue.queue_click(node_id);
+                    }
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
@@ -448,17 +454,21 @@ impl McpBridge {
             }
 
             BridgeCommand::Focus { node_id, respond } => {
-                if inner.tree.get(node_id).is_some() {
-                    inner.event_queue.queue_focus(node_id);
+                if let Some(node) = inner.tree.get(node_id) {
+                    if let Some(center) = node.center() {
+                        // Use coordinate-based click to focus when bounds available
+                        inner.event_queue.queue_pointer_click(center);
+                    } else {
+                        // Fall back to AccessKit focus action
+                        inner.event_queue.queue_focus(node_id);
+                    }
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
-                } else if inner.widgets.contains_key(&node_id.0) {
-                    // Widget registry focus - just click to focus
-                    if let Some(widget) = inner.widgets.get(&node_id.0) {
-                        let center = widget.rect.center();
-                        inner.event_queue.queue_pointer_click(center);
-                    }
+                } else if let Some(widget) = inner.widgets.get(&node_id.0) {
+                    // Widget registry focus - click to focus
+                    let center = widget.rect.center();
+                    inner.event_queue.queue_pointer_click(center);
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
@@ -566,8 +576,11 @@ impl McpBridge {
             }
 
             BridgeCommand::Hover { node_id, respond } => {
-                if inner.tree.get(node_id).is_some() {
-                    // TODO: Get node position from AccessKit and queue hover
+                if let Some(node) = inner.tree.get(node_id) {
+                    if let Some(center) = node.center() {
+                        inner.event_queue.queue_hover(center);
+                    }
+                    // If no bounds, hover is a no-op but still succeeds
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
