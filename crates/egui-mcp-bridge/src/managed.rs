@@ -173,8 +173,6 @@ impl McpResponseExt for Response {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: These tests would require egui test infrastructure
     // For now, they serve as documentation of expected behavior
 }
