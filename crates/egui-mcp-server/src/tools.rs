@@ -180,7 +180,12 @@ impl EguiMcpServer {
 
                 // Build command
                 let mut cmd = Command::new(&params.application_path);
-                
+
+                // Set working directory if provided (for resolving relative paths in args)
+                if let Some(ref cwd) = params.cwd {
+                    cmd.current_dir(cwd);
+                }
+
                 // Add arguments if provided
                 if let Some(ref args) = params.args {
                     cmd.args(args);
@@ -466,6 +471,9 @@ pub struct LaunchParams {
     /// Timeout in seconds to wait for MCP bridge (default: 10)
     #[serde(default)]
     pub timeout: Option<u32>,
+    /// Working directory for the application (for resolving relative paths in args)
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
