@@ -56,7 +56,7 @@ impl EguiMcpServer {
             ),
             Tool::new(
                 "egui_launch",
-                "Launch an egui application with optional environment variables. Auto-detects X11 mode when DISPLAY is set (for virtual displays like Xvfb). Waits for MCP bridge, then auto-connects.",
+                "Launch an egui application with optional environment variables. Auto-detects X11 mode when DISPLAY is set (for virtual displays like Xvfb). Waits for MCP bridge, then auto-connects. NOTE: Performs pre-flight check to verify binary was compiled with MCP support (--features mcp).",
                 schema_to_json_object::<LaunchParams>(),
             ),
             Tool::new(
@@ -138,6 +138,12 @@ impl EguiMcpServer {
                     Ok(p) => p,
                     Err(e) => return error(format!("Invalid params: {}", e)),
                 };
+
+                // === PRE-FLIGHT CHECK: Verify binary has MCP support ===
+                // This prevents waiting 10s only to fail with a cryptic error
+                if let Err(e) = check_mcp_support(&params.application_path) {
+                    return error(e);
+                }
 
                 // Check if already launched
                 {
@@ -423,6 +429,58 @@ impl Default for EguiMcpServer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Check if a binary was compiled with MCP bridge support.
+/// Uses `strings` command to look for known MCP bridge markers.
+fn check_mcp_support(binary_path: &str) -> Result<(), String> {
+    // Check if file exists first
+    if !std::path::Path::new(binary_path).exists() {
+        return Err(format!("Binary not found: {}", binary_path));
+    }
+
+    // Run `strings` on the binary to extract readable strings
+    let output = Command::new("strings")
+        .arg(binary_path)
+        .output()
+        .map_err(|e| format!("Failed to run 'strings' command: {}", e))?;
+
+    if !output.status.success() {
+        // If strings command fails, skip the check (don't block on tool availability)
+        tracing::warn!(
+            "Could not inspect binary with 'strings' command, skipping MCP support check"
+        );
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Look for known MCP bridge markers
+    // These strings are present in binaries compiled with egui-mcp-bridge
+    let mcp_markers = [
+        "MCP bridge listening on port",
+        "egui_mcp_bridge",
+        "Bridge server listening on port",
+    ];
+
+    let has_mcp = mcp_markers.iter().any(|marker| stdout.contains(marker));
+
+    if !has_mcp {
+        return Err(format!(
+            "❌ Binary '{}' was NOT compiled with MCP bridge support.\n\n\
+             The egui-mcp-bridge library is not linked into this binary.\n\n\
+             To fix, rebuild with the 'mcp' feature enabled:\n\
+             \n\
+                 cargo build --features mcp\n\
+             \n\
+             Or if using a Makefile:\n\
+             \n\
+                 make dev   # (if configured for MCP builds)",
+            binary_path
+        ));
+    }
+
+    Ok(())
 }
 
 fn parse_ref(r: &str) -> Result<u64, McpError> {

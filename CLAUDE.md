@@ -38,7 +38,7 @@ cargo fmt
 ## MCP Tools
 
 ### App Lifecycle
-- `egui_launch` - Launch app with env vars, auto-connect (⭐ **auto-detects X11 mode**)
+- `egui_launch` - Launch app with env vars, auto-connect (⭐ **pre-flight MCP check**, auto-detects X11)
 - `egui_kill` - Kill launched app and disconnect
 - `egui_connect` - Connect to already-running app
 - `egui_disconnect` - Disconnect from app
@@ -181,6 +181,29 @@ Slider drags use a state machine (`DragPhase`) that executes over multiple frame
 `MoveToStart` -> `Press` -> `Drag` -> `Release` -> `Done`
 
 ## Testing Gotchas
+
+### Binary Not Compiled with MCP Support
+
+**Problem:** `egui_launch` fails with "MCP bridge not available" after waiting 10 seconds.
+
+**Root cause:** The application binary was not compiled with the `mcp` feature flag.
+
+**Solution:** The `egui_launch` tool now performs a **pre-flight check** before launching. If the binary lacks MCP support, you get an immediate error with fix instructions:
+
+```
+❌ Binary '/path/to/app' was NOT compiled with MCP bridge support.
+
+The egui-mcp-bridge library is not linked into this binary.
+
+To fix, rebuild with the 'mcp' feature enabled:
+
+    cargo build --features mcp
+```
+
+**Manual check** (verify a binary has MCP support):
+```bash
+strings /path/to/binary | grep -q "MCP bridge listening" && echo "✅ Has MCP" || echo "❌ No MCP"
+```
 
 ### Wayland vs X11 on Linux
 
