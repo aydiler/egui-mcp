@@ -202,6 +202,10 @@ impl EguiMcpServer {
                     cmd.env(key, value);
                 }
 
+                // Explicitly remove WAYLAND_DISPLAY from child process
+                // (enforced_env.remove() only removes from hashmap, not inherited env)
+                cmd.env_remove("WAYLAND_DISPLAY");
+
                 // Spawn the process
                 cmd.stdin(Stdio::null())
                     .stdout(Stdio::piped())
