@@ -77,12 +77,20 @@ This ensures egui apps use the virtual X11 display on Wayland systems.
 ### Complete Virtual Display Workflow
 
 ```bash
-# 1. Start Xvfb (once per session)
-Xvfb :99 -screen 0 1920x1080x24 &
+# 1. Start Xvfb (once per session) - use helper function for reliability
+start_xvfb() {
+    pkill -9 Xvfb 2>/dev/null
+    rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+    Xvfb :99 -screen 0 1920x1080x24 &
+    sleep 2
+    DISPLAY=:99 xdpyinfo >/dev/null && echo "✅ Xvfb ready" || echo "❌ Xvfb failed"
+}
+start_xvfb
 ```
 
 ```
 # 2. Launch app on virtual display (auto-detects X11)
+# NOTE: egui_launch now verifies Xvfb is running before launching
 egui_launch({
   applicationPath: "./target/debug/app",
   env: { "DISPLAY": ":99" }
@@ -97,6 +105,27 @@ screenshot_window({ pattern: "App", display: ":99" })
 
 # 5. Cleanup
 egui_kill()
+```
+
+### Pre-flight Checks
+
+`egui_launch` now performs two pre-flight checks before launching:
+
+1. **MCP Support Check**: Verifies binary has egui-mcp-bridge compiled in
+2. **Xvfb Health Check**: Verifies X11 display :99 is responding (via `xdpyinfo`)
+
+If Xvfb is not running (stale socket files), you'll get a helpful error:
+
+```
+❌ X11 display :99 is not responding.
+
+Xvfb may have died leaving stale socket files.
+
+To fix, run:
+    pkill -9 Xvfb 2>/dev/null
+    rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+    Xvfb :99 -screen 0 1920x1080x24 &
+    sleep 2
 ```
 
 ## Architecture
@@ -214,6 +243,32 @@ strings /path/to/binary | grep -q "MCP bridge listening" && echo "✅ Has MCP" |
 **Manual workaround** (if not using `egui_launch`):
 ```bash
 DISPLAY=:99 WINIT_UNIX_BACKEND=x11 ./my-app
+```
+
+### Xvfb Stale Socket Files (Screenshots Black/Empty)
+
+**Problem:** `egui_launch` connects successfully, `egui_snapshot` works, but `screenshot_window` fails to find any windows and captures are black/empty.
+
+**Root cause:** Xvfb process died but left stale socket files (`/tmp/.X99-lock`, `/tmp/.X11-unix/X99`). The egui MCP bridge works via TCP (doesn't need X11), but screenshots require a working X11 display.
+
+**Symptoms:**
+- `egui_launch` succeeds, `egui_snapshot` returns nodes
+- `screenshot_window` says "Window not found"
+- `xdotool search` returns nothing
+- Screen captures are tiny (~400 bytes) black images
+
+**Solution:** The `egui_launch` tool now verifies Xvfb is responding before launching. If you see the error, run:
+
+```bash
+pkill -9 Xvfb 2>/dev/null
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+Xvfb :99 -screen 0 1920x1080x24 &
+sleep 2
+```
+
+**Prevention:** Always verify Xvfb before starting a test session:
+```bash
+DISPLAY=:99 xdpyinfo | head -3  # Should show "name of display: :99"
 ```
 
 ### Port Conflicts

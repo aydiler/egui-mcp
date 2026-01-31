@@ -56,7 +56,7 @@ impl EguiMcpServer {
             ),
             Tool::new(
                 "egui_launch",
-                "Launch an egui application with optional environment variables. Auto-detects X11 mode when DISPLAY is set (for virtual displays like Xvfb). Waits for MCP bridge, then auto-connects. NOTE: Performs pre-flight check to verify binary was compiled with MCP support (--features mcp).",
+                "Launch an egui application with optional environment variables. Auto-detects X11 mode when DISPLAY is set (for virtual displays like Xvfb). Waits for MCP bridge, then auto-connects. NOTE: Performs pre-flight checks to verify (1) binary was compiled with MCP support (--features mcp), and (2) Xvfb is running on :99.",
                 schema_to_json_object::<LaunchParams>(),
             ),
             Tool::new(
@@ -183,6 +183,12 @@ impl EguiMcpServer {
                 enforced_env.remove("WAYLAND_DISPLAY"); // Ensure Wayland doesn't interfere
 
                 // === END ENFORCEMENT ===
+
+                // === PRE-FLIGHT CHECK: Verify Xvfb is running ===
+                // This prevents cryptic errors when socket exists but Xvfb died
+                if let Err(e) = check_xvfb_running(ENFORCED_DISPLAY) {
+                    return error(e);
+                }
 
                 // Build command
                 let mut cmd = Command::new(&params.application_path);
@@ -481,6 +487,67 @@ fn check_mcp_support(binary_path: &str) -> Result<(), String> {
              \n\
                  make dev   # (if configured for MCP builds)",
             binary_path
+        ));
+    }
+
+    Ok(())
+}
+
+/// Check if Xvfb (or any X server) is running and accepting connections on the given display.
+/// This prevents cryptic errors when the display socket exists but Xvfb isn't running.
+fn check_xvfb_running(display: &str) -> Result<(), String> {
+    // Try xdpyinfo first (most reliable)
+    let output = Command::new("xdpyinfo")
+        .env("DISPLAY", display)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => return Ok(()),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            // Check for common error patterns
+            if stderr.contains("unable to open display") {
+                // Display socket might exist but Xvfb isn't running (stale state)
+                let display_num = display.trim_start_matches(':');
+                return Err(format!(
+                    "❌ X11 display {} is not responding.\n\n\
+                     Xvfb may have died leaving stale socket files.\n\n\
+                     To fix, run:\n\
+                     \n\
+                         pkill -9 Xvfb 2>/dev/null\n\
+                         rm -f /tmp/.X{}-lock /tmp/.X11-unix/X{}\n\
+                         Xvfb {} -screen 0 1920x1080x24 &\n\
+                         sleep 2\n\
+                     \n\
+                     Then retry egui_launch.",
+                    display, display_num, display_num, display
+                ));
+            }
+        }
+        Err(_) => {
+            // xdpyinfo not available, try alternative check
+            tracing::warn!("xdpyinfo not available, skipping Xvfb check");
+            return Ok(());
+        }
+    }
+
+    // Fallback: check if X socket exists (less reliable but better than nothing)
+    let display_num = display.trim_start_matches(':');
+    let socket_path = format!("/tmp/.X11-unix/X{}", display_num);
+
+    if !std::path::Path::new(&socket_path).exists() {
+        return Err(format!(
+            "❌ X11 display {} not found.\n\n\
+             No X server is running on this display.\n\n\
+             To start Xvfb, run:\n\
+             \n\
+                 Xvfb {} -screen 0 1920x1080x24 &\n\
+                 sleep 2\n\
+             \n\
+             Then retry egui_launch.",
+            display, display
         ));
     }
 
