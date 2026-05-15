@@ -499,8 +499,25 @@ impl McpBridge {
             pending.extend(actions);
         }
 
-        // Inject regular egui events into raw_input
+        // Inject regular egui events into raw_input.
+        //
+        // For synthesized Key events with modifiers, also OR those modifiers into
+        // `raw_input.modifiers` so app code reading `i.modifiers.ctrl` (etc.) sees
+        // the modifier as "held" for the duration of this frame. egui derives
+        // `Input.modifiers` directly from `RawInput.modifiers` (see egui
+        // `InputState::begin_pass`), not from per-event modifier fields, so without
+        // this step a synthesized Ctrl+F would fire `key_pressed(F)` but the
+        // modifier check would fail.
         let events = inner.event_queue.take_egui_events();
+        for event in &events {
+            if let egui::Event::Key { modifiers, .. } = event {
+                raw_input.modifiers.alt |= modifiers.alt;
+                raw_input.modifiers.ctrl |= modifiers.ctrl;
+                raw_input.modifiers.shift |= modifiers.shift;
+                raw_input.modifiers.mac_cmd |= modifiers.mac_cmd;
+                raw_input.modifiers.command |= modifiers.command;
+            }
+        }
         for event in events {
             raw_input.events.push(event);
         }
@@ -748,6 +765,31 @@ impl McpBridge {
                     self.runtime_handle.spawn(async move {
                         respond.send(Err(msg)).await;
                     });
+                }
+            }
+
+            BridgeCommand::SendKey {
+                key,
+                modifiers,
+                press_only,
+                respond,
+            } => {
+                // Parse first so we surface invalid input as a clean error,
+                // not a silent dropped event.
+                let parsed = crate::events::parse_key(&key)
+                    .and_then(|k| crate::events::parse_modifiers(&modifiers).map(|m| (k, m)));
+                match parsed {
+                    Ok((k, m)) => {
+                        inner.event_queue.queue_key(k, m, press_only);
+                        self.runtime_handle.spawn(async move {
+                            respond.send(Ok(())).await;
+                        });
+                    }
+                    Err(e) => {
+                        self.runtime_handle.spawn(async move {
+                            respond.send(Err(e)).await;
+                        });
+                    }
                 }
             }
 

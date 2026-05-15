@@ -2,8 +2,8 @@
 
 use crate::protocol::{
     ClickParams, FocusParams, GetValueParams, HoverParams, Request, RequestId, Response,
-    ScrollParams, SetValueParams, SnapshotResponse, SuccessResponse, TypeTextParams, ValueResponse,
-    INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, NODE_NOT_FOUND,
+    ScrollParams, SendKeyParams, SetValueParams, SnapshotResponse, SuccessResponse, TypeTextParams,
+    ValueResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, NODE_NOT_FOUND,
 };
 use egui::accesskit::NodeId;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -32,6 +32,12 @@ pub enum BridgeCommand {
     TypeText {
         node_id: NodeId,
         text: String,
+        respond: oneshot::Sender<Result<(), String>>,
+    },
+    SendKey {
+        key: String,
+        modifiers: Vec<String>,
+        press_only: bool,
         respond: oneshot::Sender<Result<(), String>>,
     },
     Hover {
@@ -310,6 +316,37 @@ async fn handle_request(request: Request, command_tx: &mpsc::Sender<BridgeComman
                     },
                 ),
                 Some(Err(e)) => Response::error(id, NODE_NOT_FOUND, e),
+                None => Response::error(id, INTERNAL_ERROR, "No response from bridge"),
+            }
+        }
+
+        "send_key" => {
+            let params: SendKeyParams = match parse_params(&request) {
+                Ok(p) => p,
+                Err(e) => return Response::error(id, INVALID_PARAMS, e),
+            };
+            let (tx, rx) = oneshot::channel();
+            if command_tx
+                .send(BridgeCommand::SendKey {
+                    key: params.key,
+                    modifiers: params.modifiers,
+                    press_only: params.press_only,
+                    respond: tx,
+                })
+                .await
+                .is_err()
+            {
+                return Response::error(id, INTERNAL_ERROR, "Bridge disconnected");
+            }
+            match rx.recv().await {
+                Some(Ok(())) => Response::success(
+                    id,
+                    SuccessResponse {
+                        success: true,
+                        message: None,
+                    },
+                ),
+                Some(Err(e)) => Response::error(id, INVALID_PARAMS, e),
                 None => Response::error(id, INTERNAL_ERROR, "No response from bridge"),
             }
         }

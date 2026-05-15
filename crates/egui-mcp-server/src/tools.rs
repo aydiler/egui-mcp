@@ -90,6 +90,17 @@ impl EguiMcpServer {
                 schema_to_json_object::<TypeParams>(),
             ),
             Tool::new(
+                "egui_key",
+                "Send a keyboard event with optional modifiers (global — not targeted at a widget). \
+                 Examples: {key: \"F\", modifiers: [\"ctrl\"]} for Ctrl+F, \
+                 {key: \"Escape\"} for Esc, {key: \"F5\"} for F5. \
+                 Supported keys: A-Z, 0-9, F1-F35, Enter, Escape, Tab, Space, Backspace, Delete, \
+                 Home, End, PageUp, PageDown, Insert, ArrowLeft/Right/Up/Down, and common symbols. \
+                 Modifiers (case-insensitive): ctrl, shift, alt, command. \
+                 Default sends press+release; set press_only=true to hold the key.",
+                schema_to_json_object::<KeyParams>(),
+            ),
+            Tool::new(
                 "egui_fill",
                 "Set value directly on element (for sliders, spinboxes).",
                 schema_to_json_object::<FillParams>(),
@@ -344,6 +355,28 @@ impl EguiMcpServer {
                 match client.type_text(node_id, &params.text).await {
                     Ok(()) => success(format!("Typed '{}' into {}", params.text, params.r#ref)),
                     Err(e) => error(format!("Type failed: {}", e)),
+                }
+            }
+            "egui_key" => {
+                let params: KeyParams = match serde_json::from_value(args) {
+                    Ok(p) => p,
+                    Err(e) => return error(format!("Invalid params: {}", e)),
+                };
+                let client = self.client.lock().await;
+                match client
+                    .send_key(&params.key, &params.modifiers, params.press_only)
+                    .await
+                {
+                    Ok(()) => {
+                        let mods_str = if params.modifiers.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{}+", params.modifiers.join("+"))
+                        };
+                        let suffix = if params.press_only { " (press_only)" } else { "" };
+                        success(format!("Sent key {}{}{}", mods_str, params.key, suffix))
+                    }
+                    Err(e) => error(format!("Key failed: {}", e)),
                 }
             }
             "egui_fill" => {
@@ -617,6 +650,18 @@ pub struct TypeParams {
     pub r#ref: String,
     /// Text to type
     pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct KeyParams {
+    /// Key name (case-insensitive). Examples: "F", "Escape", "F5", "ArrowLeft", "Enter".
+    pub key: String,
+    /// Modifier names (case-insensitive). Subset of "ctrl", "shift", "alt", "command".
+    #[serde(default)]
+    pub modifiers: Vec<String>,
+    /// If true, emit only the key-press event (don't auto-release). Default false.
+    #[serde(default)]
+    pub press_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

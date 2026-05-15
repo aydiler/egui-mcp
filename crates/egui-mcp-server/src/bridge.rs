@@ -128,6 +128,23 @@ impl BridgeClient {
         Ok(())
     }
 
+    /// Send a key event (with optional modifiers) globally. Not targeted at a
+    /// specific widget — egui's `Input::key_pressed` handlers catch it.
+    pub async fn send_key(
+        &self,
+        key: &str,
+        modifiers: &[String],
+        press_only: bool,
+    ) -> Result<(), String> {
+        let params = serde_json::json!({
+            "key": key,
+            "modifiers": modifiers,
+            "press_only": press_only,
+        });
+        self.call("send_key", Some(params)).await?;
+        Ok(())
+    }
+
     /// Hover over a node.
     pub async fn hover(&self, node_id: u64) -> Result<(), String> {
         let params = serde_json::json!({ "node_id": node_id });

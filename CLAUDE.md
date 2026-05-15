@@ -48,6 +48,7 @@ cargo fmt
 - `egui_snapshot` - Get accessibility tree with `[ref=nX]` references
 - `egui_click` - Click element by ref
 - `egui_type` - Type text into input
+- `egui_key` - Send keyboard event with optional modifiers (global, not widget-targeted). Use for shortcuts: `{key: "F", modifiers: ["ctrl"]}`, `{key: "Escape"}`, `{key: "F5"}`.
 - `egui_fill` - Set value (sliders, spinboxes)
 - `egui_focus` - Focus element
 - `egui_hover` - Hover over element
@@ -270,6 +271,26 @@ sleep 2
 ```bash
 DISPLAY=:99 xdpyinfo | head -3  # Should show "name of display: :99"
 ```
+
+### Menu Bar Items Missing from Snapshots
+
+**Problem:** Sub-buttons inside `ui.menu_button("File", |ui| { ... })` don't appear in `egui_snapshot()` output, so `egui_click` can't target them. Triggering the menu via keyboard works via `egui_key` (e.g. send `Alt+F` if the app wired it that way), but the menu items themselves stay invisible.
+
+**Root cause:** egui's `MenuButton` widget doesn't emit AccessKit nodes for its sub-buttons — they only exist inside the closure's transient context. Upstream limitation, not an MCP bridge filter.
+
+**Workaround:** Register menu items explicitly from inside the closure:
+
+```rust
+ui.menu_button("File", |ui| {
+    let resp = ui.add(egui::Button::new("Find...").shortcut_text("Ctrl+F"));
+    self.mcp_bridge.register_widget("File: Find...", "button", &resp, None);
+    if resp.clicked() { /* ... */ }
+});
+```
+
+The manual registration writes into the bridge's fallback widget registry, which `egui_snapshot` reads when AccessKit doesn't surface the node. After this, the menu item is clickable via `egui_click({ ref: "n<N>" })`.
+
+**Alternative:** use `egui_key({ key: "F", modifiers: ["ctrl"] })` to fire the shortcut directly without opening the menu at all — usually the most natural test path.
 
 ### Port Conflicts
 

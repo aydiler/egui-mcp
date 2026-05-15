@@ -86,6 +86,8 @@ egui_snapshot()
 # Interact
 egui_click({ ref: "n5" })
 egui_type({ ref: "n3", text: "Hello" })
+egui_key({ key: "F", modifiers: ["ctrl"] })   # Send a shortcut (Ctrl+F)
+egui_key({ key: "Escape" })                    # Send a bare key
 
 # Cleanup
 egui_kill()
@@ -123,6 +125,7 @@ egui_launch({
 | `egui_snapshot` | Get accessibility tree |
 | `egui_click` | Click element by ref |
 | `egui_type` | Type text into input |
+| `egui_key` | Send a keyboard event with optional modifiers (e.g. Ctrl+F, Esc, F5) |
 | `egui_fill` | Set value (sliders, etc.) |
 | `egui_focus` | Focus element |
 | `egui_hover` | Hover over element |

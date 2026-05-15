@@ -139,6 +139,19 @@ pub struct GetValueParams {
     pub node_id: u64,
 }
 
+/// Send-key parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendKeyParams {
+    /// egui::Key name (e.g. "F", "Escape", "F5", "ArrowLeft"). Case-insensitive.
+    pub key: String,
+    /// Modifier names. Subset of "ctrl", "shift", "alt", "command".
+    #[serde(default)]
+    pub modifiers: Vec<String>,
+    /// If true, emit only the key-press event (no release). Default false.
+    #[serde(default)]
+    pub press_only: bool,
+}
+
 /// Scroll parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScrollParams {
