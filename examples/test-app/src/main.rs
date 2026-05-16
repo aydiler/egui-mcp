@@ -35,6 +35,7 @@ struct TestApp {
     selected_option: usize,
     click_count: u32,
     status_message: String,
+    drag_text: String,
 }
 
 impl TestApp {
@@ -47,6 +48,9 @@ impl TestApp {
             selected_option: 0,
             click_count: 0,
             status_message: "Ready".into(),
+            drag_text: "Drag across this text to test egui_drag. \
+                        Selection should highlight as you drag."
+                .into(),
         }
     }
 }
@@ -148,8 +152,14 @@ impl eframe::App for TestApp {
             // Button with counter
             ui.horizontal(|ui| {
                 let response = ui.button("Click Me");
-                self.bridge
-                    .register_widget("Click Me", "button", &response, None);
+                // Expose click_count as the widget's value so MCP tests can
+                // verify response.clicked() actually fired via egui_get_value.
+                self.bridge.register_widget(
+                    "Click Me",
+                    "button",
+                    &response,
+                    Some(&self.click_count.to_string()),
+                );
                 if response.clicked() {
                     self.click_count += 1;
                     self.status_message = format!("Button clicked {} times!", self.click_count);
@@ -171,6 +181,22 @@ impl eframe::App for TestApp {
                 self.click_count = 0;
                 self.status_message = "Reset!".into();
             }
+
+            ui.add_space(10.0);
+
+            // Drag target: multiline TextEdit. Drag the pointer across it via
+            // `egui_drag` to verify the new drag tool produces a real selection.
+            ui.label("Drag area (for egui_drag testing):");
+            let drag_response = ui.add_sized(
+                [380.0, 60.0],
+                egui::TextEdit::multiline(&mut self.drag_text).desired_rows(3),
+            );
+            self.bridge.register_widget(
+                "Drag Area",
+                "text_area",
+                &drag_response,
+                Some(&self.drag_text),
+            );
 
             ui.add_space(20.0);
             ui.separator();

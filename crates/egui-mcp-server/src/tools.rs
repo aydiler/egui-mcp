@@ -125,6 +125,13 @@ impl EguiMcpServer {
                 "Scroll at a position. Use to test scroll isolation between panels.",
                 schema_to_json_object::<ScrollParams>(),
             ),
+            Tool::new(
+                "egui_drag",
+                "Drag the pointer from (x1, y1) to (x2, y2) in screen-space pixels. \
+                 Use for text selection in selectable_label widgets, or any continuous-drag \
+                 interaction. Coordinates are absolute (find them via egui_snapshot rects).",
+                schema_to_json_object::<DragParams>(),
+            ),
         ]
     }
 
@@ -463,6 +470,23 @@ impl EguiMcpServer {
                     Err(e) => error(format!("Scroll failed: {}", e)),
                 }
             }
+            "egui_drag" => {
+                let params: DragParams = match serde_json::from_value(args) {
+                    Ok(p) => p,
+                    Err(e) => return error(format!("Invalid params: {}", e)),
+                };
+                let client = self.client.lock().await;
+                match client
+                    .drag(params.x1, params.y1, params.x2, params.y2)
+                    .await
+                {
+                    Ok(()) => success(format!(
+                        "Dragged from ({}, {}) to ({}, {})",
+                        params.x1, params.y1, params.x2, params.y2
+                    )),
+                    Err(e) => error(format!("Drag failed: {}", e)),
+                }
+            }
             _ => error(format!("Unknown tool: {}", name)),
         }
     }
@@ -683,4 +707,16 @@ pub struct ScrollParams {
     pub delta_x: f32,
     /// Vertical scroll delta (positive = down, negative = up)
     pub delta_y: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct DragParams {
+    /// Drag start X (absolute screen-space px)
+    pub x1: f32,
+    /// Drag start Y (absolute screen-space px)
+    pub y1: f32,
+    /// Drag end X (absolute screen-space px)
+    pub x2: f32,
+    /// Drag end Y (absolute screen-space px)
+    pub y2: f32,
 }

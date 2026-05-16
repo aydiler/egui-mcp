@@ -416,6 +416,16 @@ impl McpBridge {
     pub fn inject_raw_input(&self, raw_input: &mut egui::RawInput) {
         let mut inner = self.inner.lock().unwrap();
 
+        // Force window focus whenever we're driving input. Xvfb (and any windowing
+        // system where the app isn't the active window) leaves `raw_input.focused`
+        // at false, and egui's pointer handling can drop button events on unfocused
+        // windows — the click is registered as a hover-then-release with no press
+        // recognized. This single flag flip unblocks deep-tree button activation
+        // without affecting real keyboard/pointer input from the user.
+        if inner.pending_drag.is_some() || inner.pending_click.is_some() {
+            raw_input.focused = true;
+        }
+
         // Process pending drag one phase per frame
         if let Some(ref mut drag) = inner.pending_drag {
             let event = match drag.phase {
@@ -456,35 +466,38 @@ impl McpBridge {
             inner.pending_drag = None;
         }
 
-        // Process pending click one phase per frame (for buttons that need multi-frame clicks)
+        // Process pending click one phase per frame (for buttons that need multi-frame clicks).
+        //
+        // Hover persistence (H1 fix): re-emit PointerMoved at every Press/Release frame so
+        // egui's pointer hover state stays "on" the widget across the full sequence. Without
+        // this, egui can decay the hover and reject the click as "release somewhere else".
         if let Some(ref mut click) = inner.pending_click {
-            let event = match click.phase {
+            match click.phase {
                 ClickPhase::Move => {
                     click.phase = ClickPhase::Press;
-                    Some(egui::Event::PointerMoved(click.pos))
+                    raw_input.events.push(egui::Event::PointerMoved(click.pos));
                 }
                 ClickPhase::Press => {
                     click.phase = ClickPhase::Release;
-                    Some(egui::Event::PointerButton {
+                    raw_input.events.push(egui::Event::PointerMoved(click.pos));
+                    raw_input.events.push(egui::Event::PointerButton {
                         pos: click.pos,
                         button: egui::PointerButton::Primary,
                         pressed: true,
                         modifiers: egui::Modifiers::NONE,
-                    })
+                    });
                 }
                 ClickPhase::Release => {
                     click.phase = ClickPhase::Done;
-                    Some(egui::Event::PointerButton {
+                    raw_input.events.push(egui::Event::PointerMoved(click.pos));
+                    raw_input.events.push(egui::Event::PointerButton {
                         pos: click.pos,
                         button: egui::PointerButton::Primary,
                         pressed: false,
                         modifiers: egui::Modifiers::NONE,
-                    })
+                    });
                 }
-                ClickPhase::Done => None,
-            };
-            if let Some(event) = event {
-                raw_input.events.push(event);
+                ClickPhase::Done => {}
             }
         }
         // Clear completed click
@@ -492,11 +505,16 @@ impl McpBridge {
             inner.pending_click = None;
         }
 
-        // Get pending AccessKit actions and store them for later retrieval
+        // Dispatch pending AccessKit actions directly as egui events so they fire even
+        // for apps that never call `take_pending_actions()`. egui processes
+        // `Event::AccessKitActionRequest` natively (e.g. egui::Button responds to
+        // Action::Click). This is the H3 half of the click-bug fix: the queued
+        // Action::Click now actually reaches the widget.
         let actions = inner.event_queue.take_accesskit_actions();
-        if !actions.is_empty() {
-            let mut pending = self.pending_actions.lock().unwrap();
-            pending.extend(actions);
+        for action in actions {
+            raw_input
+                .events
+                .push(egui::Event::AccessKitActionRequest(action));
         }
 
         // Inject regular egui events into raw_input.
@@ -621,6 +639,10 @@ impl McpBridge {
                         pos: center,
                         phase: ClickPhase::Move,
                     });
+                    // H3 belt-and-suspenders: also queue an AccessKit Action::Click.
+                    // egui's Button responds to it directly (bypasses hit-testing), so this
+                    // catches widgets where the synthetic pointer sequence is rejected.
+                    inner.event_queue.queue_click(node_id);
                     self.runtime_handle.spawn(async move {
                         respond.send(Ok(())).await;
                     });
@@ -855,6 +877,26 @@ impl McpBridge {
                 let pos = egui::pos2(x, y);
                 let delta = egui::vec2(delta_x, delta_y);
                 inner.event_queue.queue_scroll(pos, delta);
+                self.runtime_handle.spawn(async move {
+                    respond.send(Ok(())).await;
+                });
+            }
+
+            BridgeCommand::Drag {
+                x1,
+                y1,
+                x2,
+                y2,
+                respond,
+            } => {
+                // Reuse the existing 5-phase drag state machine. The slider
+                // command at line ~715 enqueues a PendingDrag the same way;
+                // here the caller supplies absolute coordinates instead.
+                inner.pending_drag = Some(PendingDrag {
+                    start_pos: egui::pos2(x1, y1),
+                    end_pos: egui::pos2(x2, y2),
+                    phase: DragPhase::MoveToStart,
+                });
                 self.runtime_handle.spawn(async move {
                     respond.send(Ok(())).await;
                 });

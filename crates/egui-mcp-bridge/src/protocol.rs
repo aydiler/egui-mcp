@@ -99,6 +99,9 @@ pub enum BridgeMethod {
 
     #[serde(rename = "get_value")]
     GetValue { node_id: u64 },
+
+    #[serde(rename = "drag")]
+    Drag { x1: f32, y1: f32, x2: f32, y2: f32 },
 }
 
 /// Click parameters.
@@ -161,6 +164,15 @@ pub struct ScrollParams {
     /// Scroll delta in pixels. Positive = scroll down/right, negative = scroll up/left.
     pub delta_x: f32,
     pub delta_y: f32,
+}
+
+/// Drag parameters: absolute screen-space start (x1, y1) → end (x2, y2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DragParams {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
 }
 
 /// Snapshot response containing the serialized tree.

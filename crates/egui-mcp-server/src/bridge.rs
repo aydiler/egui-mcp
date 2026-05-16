@@ -171,6 +171,19 @@ impl BridgeClient {
         Ok(())
     }
 
+    /// Drag the pointer from (x1, y1) to (x2, y2) in screen-space pixels.
+    /// Useful for text selection and any continuous-drag interaction.
+    pub async fn drag(&self, x1: f32, y1: f32, x2: f32, y2: f32) -> Result<(), String> {
+        let params = serde_json::json!({
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+        });
+        self.call("drag", Some(params)).await?;
+        Ok(())
+    }
+
     async fn call(
         &self,
         method: &str,
